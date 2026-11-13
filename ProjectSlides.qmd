@@ -1,0 +1,626 @@
+---
+subtitle: "FWE 711 Final Project"
+title: "Mapping the Mosaic of Vulnerability: A Multi-Source Assessment of Wisconsin’s Ecological Stress"
+author: "Jacob Johnson"
+format: 
+  revealjs:
+    width: 1600
+    height: 900
+    margin: 0.05
+    slide-number: true
+    embed-resources: true
+    self-contained-math: true   # optional, but recommended
+    output-file: finalprojectslides    # optional
+---
+
+```{r packages, message=F}
+## Packages
+### For plotting and data manipulation
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(patchwork)
+library(maps)
+library(ggmap)
+### For PCA
+library(corrplot)
+library(factoextra)
+### For CFA
+library(psych)
+library(lavaan) 
+library(semPlot)
+```
+
+```{r wisconsin_data, message=F}
+## Read in data
+wdat <- read.csv('wisconsin_climate_data.csv') |> 
+  rename(SoilClay_b0 = Soil_Clay_b0,
+         SoilClay_b10 = Soil_Clay_b10,
+         SoilClay_b30 = Soil_Clay_b30,
+         SoilClay_b60 = Soil_Clay_b60,
+         SoilClay_b100 = Soil_Clay_b100,
+         SoilClay_b200 = Soil_Clay_b200,
+         SoilWaterCap_b0 = Soil_Water_Cap_b0,
+         SoilWaterCap_b10 = Soil_Water_Cap_b10,
+         SoilWaterCap_b30 = Soil_Water_Cap_b30,
+         SoilWaterCap_b60 = Soil_Water_Cap_b60,
+         SoilWaterCap_b100 = Soil_Water_Cap_b100,
+         SoilWaterCap_b200 = Soil_Water_Cap_b200)
+
+## Get the Google Map for Wisconsin
+wi_map <- get_map(c(-89.768969,44.773201), maptype = "satellite", zoom = 7)
+
+## Get the outline of Wisconsin for Plots
+wi_shape <- map_data("state") |> filter(region == "wisconsin")
+```
+
+## Introduction
+
+Ecosystems don't respond to stress uniformly. Why are some landscapes resilient while neighbors collapse? 
+
+To understand how *vulnerable* a given location may be to climate stress, we need to understand the baseline environmental conditions conditions as well as the stress on that location. 
+
+<br>
+
+::: {.fragment}
+#### Research Question
+How do long-term environmental baselines interact with climate hazards to drive distinct modes of ecological vulnerability?
+:::
+
+<br>
+
+::: {.fragment .fade-in}
+
+#### Project Outline 
+:::: {.incremental}
+
+- PCA on environmental baselines
+- Factor Analysis on climate stress variables
+- Clustering on combined latent variables
+
+::::
+:::
+
+## Data
+
+Data was collected via Google Earth Engine^[\tiny https://earthengine.google.com/faq/] at 1713 locations across Wisconsin.
+
+\vspace{5em}
+
+::::: {.columns}
+
+:::: {.column width="28%"}
+### Stress Variables
+From summer 2021.
+
+```{r}
+## Select Stress Variables for CFA
+stress_vars <- wdat |> select(
+  NDVI_mean,
+  NDWI_mean, 
+  GPP_mean,
+  Percent_NonVegetated,
+  LST_mean,
+  LST_sd
+) |> scale()
+
+kable(colnames(stress_vars), col.names=NULL,
+      caption = "Variables for Evaluating Ecological Stress") |> 
+  kable_styling(font_size = 22)
+```
+
+
+::::
+:::: {.column width="34%"}
+### Baseline Variables 
+Aggregated from 2011-2020.
+
+```{r}
+## Select Baseline Environment Variables for PCA
+env_vars <- wdat |> select(
+  ## Static Location Details
+  Elevation, 
+  Slope, 
+  Aspect,
+  ## Static Environment Features
+  SoilClay_b10,
+  SoilWaterCap_b10,
+  ## MaxTemp  
+  MaxTemp_mean,  ## (Baseline summer heat/pressure)
+  MaxTemp_sd,    ## Max Temp Volatility
+  ## MinTemp
+  MinTemp_min,   ## Absolute Worst Winter Freeze,
+  MinTemp_sd,    ## Min Temp Volatility,
+  ## Precipitation
+  Precip_mean,   ## Baseline Precip
+  SWE_max,       ## Max Snowtotals
+  ## Solar Radiation
+  SurfaceRad_mean,
+  ## VaporPressure
+  VaporPressure_mean)
+
+kable(colnames(env_vars), col.names=NULL,
+      caption = "Baseline Environmental Variables") |> 
+  kable_styling(font_size = 22)
+```
+
+
+::::
+:::: {.column width="38%"}
+### Data Locations
+```{r fig.width=5}
+## Show the Data Locations
+loc_plot <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0.25, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude), 
+             size = 1.25, 
+             color = 'gray10',
+             alpha = 0.8) +
+  labs(title = "Sampled Data Locations")
+loc_plot
+```
+
+::::
+:::::
+
+## Data
+
+```{r}
+## Plot the mean min temp
+plot_tmin_mean <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0.25, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=MinTemp_min), 
+             size = 1.5, 
+             alpha = 0.8) +
+  labs(title = "Min Monthly Min Temperature") +
+  scale_colour_viridis_c()
+
+## Plot the mean min temp
+plot_tmin_sd <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0.25, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=MinTemp_sd), 
+             size = 1.5, 
+             alpha = 0.8) +
+  labs(title = "SD of Monthly Min Temperature") +
+  scale_colour_viridis_c()
+
+plot_tmin_mean + plot_tmin_sd + plot_layout(ncol = 2)
+```
+
+
+# Part 1: PCA for Baseline Environmental Variables
+
+---
+```{r}
+## Correlation Matrix of env_vars
+cor_mat <- cor(env_vars)
+corrplot(cor_mat, 
+         method = "color", 
+         col = rev(COL2('RdBu', 200)),
+         order = "hclust", 
+         hclust.method = "ward.D2",
+         addCoef.col = "black",
+         tl.col = "black",
+         number.cex = 0.55,       # Shrinks the coefficient numbers
+         tl.cex = 0.9,           # Shrinks the text labels (Variable names)
+         cl.cex = 0.9,           # Shrinks the color legend text
+         addgrid.col = "grey90",
+         mar = c(0,0,2,0),
+         title = "Environmental Variable Correlations")
+```
+---
+
+## PCA Results
+
+```{r}
+## PCA (scaled and Centered)  
+pca_res <- prcomp(env_vars, center = TRUE, scale. = TRUE)
+
+## Explained Variance
+var_exp <- summary(pca_res)$importance
+
+## Scree Plot of Variance Decomposition
+scree_plot <- fviz_eig(pca_res, 
+                       addlabels = TRUE, 
+                       ylim = c(0, 80),
+                       barfill = "#3b5fc0", barcolor = "#3b5fc0", 
+                       linecolor = "#c0392b", 
+                       ggtheme = theme_bw(base_size=12)) +
+  labs(title = "% Variance per PC",
+       y='% of Var Explained')
+
+##  Cumulative Variance Explained
+cvar_df <- tibble(
+  PC = (1:ncol(env_vars))[1:10],
+  cvar = (var_exp[3,] * 100)[1:10]
+)
+cvar_plot <- ggplot(cvar_df, aes(PC, cvar)) +
+  geom_col(fill = "#3b5fc0") +
+  geom_line(color = "#c0392b", linewidth = 1.2) +
+  geom_point(color = "#c0392b", size = 3) +
+  geom_hline(yintercept = 75, linetype="dashed", color="grey40", lwd=1) +
+  scale_y_continuous(limits=c(0,105), labels=function(x) paste0(x,"%")) +
+  scale_x_continuous(breaks=1:nrow(cvar_df)) +
+  labs(title="Cumulative Variance Explained", x="PC", y="Cumulative %") +
+  theme_bw(base_size=12)
+
+scree_plot + cvar_plot
+
+## Extract the First three PCs and add them to our data frame 
+wdat$PC1 <- pca_res$x[,1]
+wdat$PC2 <- pca_res$x[,2]
+wdat$PC3 <- pca_res$x[,3]
+```
+
+## PCA Results
+
+```{r}
+## Biplot of the first two PCs
+biplot <- fviz_pca_biplot(pca_res,
+                repel         = TRUE,
+                col.var       = "#c0392b",
+                labelsize = 6,
+                col.ind       = "#3b5fc0",
+                alpha.ind     = 0.25,
+                label         = "var",
+                ggtheme       = theme_bw(base_size = 12),
+                title         = " Biplot") +
+  labs(caption = "Arrows: variable loadings. Points: site scores.")
+biplot
+```
+
+## PCA Results
+
+```{r}
+## Look at the loadings for the first two PCs
+cont <- pca_res$rotation^2
+cont_df <- as_tibble(cont)
+cont_df$Variable <- rownames(cont)
+
+### Plot the contributions to PC1
+plot_pc1_contrib <- ggplot(cont_df, aes(x = reorder(Variable, PC1), y = PC1)) +
+  geom_bar(stat = "identity", fill = "#3b5fc0", color = "black") +
+  coord_flip() + 
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Variable Contributions to PC1",
+    x = "Environmental Variable",
+    y = "Contribution to PC1 (%)"
+  )
+
+### Plot the contributions to PC2
+plot_pc2_contrib <- ggplot(cont_df, aes(x = reorder(Variable, PC2), y = PC2)) +
+  geom_bar(stat = "identity", fill = "#3b5fc0", color = "black") +
+  coord_flip() + 
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Variable Contributions to PC2",
+    x = "Environmental Variable",
+    y = "Contribution to PC2 (%)"
+  )
+
+plot_pc1_contrib + plot_pc2_contrib
+
+## Joint Contribution Plots
+cont_df <- cont_df |> 
+  select(Variable, PC1, PC2, PC3) |> 
+  arrange(-PC1) 
+
+loadings_long <- cont_df |> 
+  pivot_longer(cols = starts_with("PC"),
+               names_to = "PC",
+               values_to = "Loading") |> 
+  mutate(Variable = factor(Variable, rev(cont_df$Variable)))
+
+joint_cont_plots <- ggplot(loadings_long, 
+                           aes(x = Variable, y = Loading, fill = PC)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ PC, scales = "free_y") +
+  coord_flip() +
+  labs(x = "Variable", y = "Loading", title = "PCA Loadings by Component") +
+  theme_minimal(base_size = 14)
+
+```
+
+## PCA Results
+
+```{r}
+## Plot PC1 over space
+plot_PC1 <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0.25, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=PC1), 
+             size = 1.5, 
+             alpha = 0.8) +
+  labs(title = "PC1") +
+  scale_colour_viridis_c(option = "D")
+
+
+## Plot PC2 over space
+plot_PC2 <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0.25, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=PC2), 
+             size = 1.5, 
+             alpha = 0.8) +
+  labs(title = "PC2") +
+  scale_colour_viridis_c(option = "D")
+
+plot_PC1 + plot_PC2
+
+```
+
+
+# Part 2: Factor Analysis for Stress Variables
+
+---
+```{r}
+## Correlation Matrix of stress_vars
+cor_mat <- cor(stress_vars)
+corrplot(cor_mat, 
+         method = "color", 
+         col = rev(COL2('RdBu', 200)),
+         order = "hclust", 
+         hclust.method = "ward.D2",
+         addCoef.col = "black",
+         tl.col = "black",
+         number.cex = 0.6,       # Shrinks the coefficient numbers
+         tl.cex = 0.9,           # Shrinks the text labels (Variable names)
+         cl.cex = 0.9,           # Shrinks the color legend text
+         addgrid.col = "grey90",
+         mar = c(0,0,2,0),
+         title = "Environmental Variable Correlations")
+```
+---
+
+## EFA 
+
+First, I test to see if factor analysis is reasonable on this data. 
+
+```{r}
+## KMO test for if factor analysis is reasonable
+kmo_res <- KMO(stress_vars)
+kmo_res
+```
+
+I then perform EFA on a subset of my sampled locations to get an idea of the factor structure. 
+
+```{r}
+## EFA on a sample of the data
+set.seed(52)
+stress_samp <- stress_vars[sample(1:nrow(stress_vars), 400),]
+parallel_test <- fa.parallel(stress_samp, 
+                             fa = "fa",         
+                             fm = "ml",         
+                             main = "Scree Plot with Parallel Analysis",
+                             plot=F)
+
+## Fit the best factor structure
+efa_result <- fa(stress_samp, 
+                 nfactors = 2,       # Swap this with whatever Step 1 suggests
+                 rotate = "oblimin", # Crucial: Allows the factors to be correlated
+                 fm = "ml")          # Maximum Likelihood method
+
+print(efa_result$loadings, cutoff = 0.3)
+
+```
+
+## EFA
+
+```{r}
+## EFA Diagram
+fa.diagram(efa_result, main = "EFA Factor Structure (Promax)", 
+           cut=0.3, simple=FALSE)
+```
+
+## CFA
+
+Now, with this structure in mind, I fit a CFA with all the data. This will allow me to set some factor loadings to zero and get a more theoretical model.  
+
+```{r message=F}
+## Run CFA (data already scaled)
+cfa_model <- '
+  Biomass =~ NDVI_mean + NDWI_mean + Percent_NonVegetated + GPP_mean
+  Metabolism =~ GPP_mean + LST_mean + LST_sd + NDWI_mean
+  
+'
+fit <- cfa(cfa_model, data = stress_vars, std.lv = TRUE)
+#summary(fit, fit.measures=T)
+
+## Plot the path diagram
+custom_labels <- c(
+  "NDVI",
+  "Non-Veg",
+  "NDWI",
+  "GPP",
+  "LST_mean",
+  "LST_sd",
+  "Biomass",
+  "Metabolism"
+)
+semPaths(fit, 
+         what='par',
+         whatLabels = "std", 
+         layout = "tree", 
+         rotation = 2,
+         edge.label.cex = 1.2, 
+         color = list(man = "lightyellow", lat = "lightblue"),
+         sizeMan = 8, sizeLat = 10,
+         nodeLabels = custom_labels,
+         title = FALSE)
+```
+
+We can then extract the latent scores of both Biomass and Metabolism for each location.
+
+```{r}
+## Extract the latent scores for each spatial point
+latent_scores <- lavPredict(fit)
+wdat$Biomass <- latent_scores[, "Biomass"]
+wdat$Metabolism <- latent_scores[, "Metabolism"]
+```
+
+# Part 3: Clustering to identify modes of vulnerability
+
+We can now combine the Principal Components from Part 1 and the predicted latent variables from Part 2 to get a full data set that includes both baseline climate information and how each location responds to climate stress. Then, we can use clustering to group locations based on how they are currently, and how they are reacting. 
+
+## K-Means Clustering
+
+We first rescale the Principal Components and Latent Vulnerability scores so that they are not imbalanced in our clustering. 
+```{r}
+## Select only the variables we want to cluster based on
+cluster_data <- wdat |> select(PC1, PC2, PC3, Biomass, Metabolism)
+
+## Rescale so that PCA and CFA are similarly weighted
+cluster_data_scaled <-  scale(cluster_data)
+
+# Use your scaled data!
+fviz_nbclust(cluster_data_scaled, kmeans, method = "wss") 
+```
+
+## Using 4 Clusters
+```{r}
+## K-means with K=4
+set.seed(12)
+km_final <- kmeans(cluster_data_scaled, centers = 4, nstart = 10)
+wdat$Cluster <- as.factor(km_final$cluster)
+wdat$Cluster <- factor(wdat$Cluster, 
+                       levels = c(3, 1, 4, 2), # The current order
+                       labels = c("1", "2", "3", "4")) # The new numbers you are assigning
+
+## Plot the Clusters
+plot_clusters <- ggplot() +
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=1, 
+               color = "black", 
+               linewidth = 0.5) +
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=Cluster), 
+             size = 1.5, 
+             alpha = 0.8) +
+  ## Keep the map proportional
+  labs(title = "Clustered Locations")
+
+plot_clusters_map <- ggmap(wi_map)+
+  ## Draw the outline of Wisconsin
+  geom_polygon(data = wi_shape, 
+               aes(x = long, y = lat, group = group), 
+               fill = "gray95", 
+               alpha=0, 
+               color = "black", 
+               linewidth = 0.5) +
+  ## Add our sampled locations
+  geom_point(data = wdat, 
+             aes(x = Longitude, y = Latitude, col=Cluster), 
+             size = 1.5, 
+             alpha = 0.8) +
+  ## Keep the map proportional
+  labs(title = "(a) Clustered Locations")
+
+
+## Calculate means for each cluster
+cluster_summary <- wdat |>
+  group_by(Cluster) |>
+  summarize(
+    N = n(),
+    Mean_Biomass = mean(Biomass),
+    Mean_Metabolism = mean(Metabolism),
+    Mean_PC1 = mean(PC1),
+    Mean_PC2 = mean(PC2),
+    Mean_PC3 = mean(PC3)
+  )
+
+
+## Plot the cluster summaries
+cplot <- ggplot(wdat, aes(y = Biomass, x = Metabolism, color = factor(Cluster))) +
+  geom_point(alpha = 0.4) +
+  geom_label(data = cluster_summary, 
+             aes(y = Mean_Biomass, x = Mean_Metabolism, label = paste("Cluster", Cluster)),
+             color = "black", fontface = "bold", size=2, alpha=0.5) +
+  theme_minimal() +
+  labs(title = "(b) Metabolism vs Biomass",
+       y = "Biomass", 
+       x = "Metabolism ",
+       color = "Cluster") + theme(legend.position = "none")
+
+cplot_PCA <- ggplot(wdat, aes(x = PC1, y = PC2, color = factor(Cluster))) +
+  geom_point(alpha = 0.4) +
+  geom_label(data = cluster_summary, 
+             aes(x = Mean_PC1, y = Mean_PC2, label = paste("Cluster", Cluster)),
+             color = "black", fontface = "bold", size=2, alpha=0.5) +
+  theme_minimal() +
+  labs(title = "(c) PC1 vs PC2",
+       x = "PC1", 
+       y = "PC2 ",
+       color = "Cluster") + theme(legend.position = "none")
+
+## Show plots
+joint_plot <- 
+  plot_clusters_map + 
+  (cplot / cplot_PCA) +
+  plot_layout(widths = c(0.4, 0.6))
+joint_plot
+```
+
+## Using 4 Clusters
+
+```{r}
+kable(cluster_summary)
+
+```
+
+## Conclusions
+
+1. Used PCA to find a suitable baseline from lots of available data. 
+
+2. Separated ecosystem potential (Biomass) from performance (Metabolism).
+
+3. Clustered locations into groups with other similar locations
+
+### Limitations
+
+1. Just looked at summer 2021.
+
+2. Didn't do anything about spatial correlation in my variables. 
+
+3. Could look at a representative location for each cluster instead of the mean.
